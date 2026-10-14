@@ -1739,6 +1739,12 @@ console.error('Appointment status update error:', error.message);
 res.status(500).json({ message: 'Appointment status update nahi ho paaya.' });
 }
 });
+app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'index.html'));
+});
 
 // Start server
 function startServer(port) {
