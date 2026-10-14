@@ -1,0 +1,22 @@
+# Environment variables & secrets (NEVER upload to GitHub)
+.env
+backend/.env
+*.env.local
+*.env.*.local
+
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
