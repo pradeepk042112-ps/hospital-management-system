@@ -889,6 +889,11 @@ async function ensureAppointmentsTable() {
       if (!phoneColumns.length) await db.query('ALTER TABLE appointments ADD COLUMN patient_phone VARCHAR(20) NULL AFTER patient_name');
       const [consentColumns] = await db.query("SHOW COLUMNS FROM appointments LIKE 'sms_consent'");
       if (!consentColumns.length) await db.query('ALTER TABLE appointments ADD COLUMN sms_consent TINYINT(1) NOT NULL DEFAULT 0 AFTER patient_phone');
+      const [adminColumns] = await db.query("SHOW COLUMNS FROM appointments LIKE 'admin_id'");
+      if (!adminColumns.length) {
+        await db.query('ALTER TABLE appointments ADD COLUMN admin_id BIGINT UNSIGNED NULL AFTER id');
+        await db.query('ALTER TABLE appointments ADD KEY idx_appointments_admin (admin_id)');
+      }
 
       await db.query(`
         CREATE TABLE IF NOT EXISTS appointment_sms_notifications (
@@ -1138,6 +1143,11 @@ async function ensurePatientsTable() {
       // Existing installations may already have a patients table. Add only the new fields.
       const [columns] = await db.query('SHOW COLUMNS FROM patients');
       const existingColumns = new Set(columns.map((column) => column.Field));
+      if (!existingColumns.has('admin_id')) {
+        await db.query('ALTER TABLE patients ADD COLUMN admin_id BIGINT UNSIGNED NULL AFTER id');
+        await db.query('ALTER TABLE patients ADD KEY idx_patients_admin (admin_id)');
+        await db.query('UPDATE patients SET admin_id = 1 WHERE admin_id IS NULL');
+      }
       const migrations = [
         ['condition_details', 'TEXT NULL'],
         ['assigned_doctor_id', 'INT UNSIGNED NULL'],
@@ -1491,13 +1501,14 @@ res.status(500).json({ message: 'Invoice database mein update nahi ho paaya.' })
 }
 });
 
-// Get all patients
+// Get all patients (Private: only for the current logged-in admin)
 app.get('/api/patients', async (req, res) => {
 try {
 await ensureDashboardTables();
 await ensurePatientsTable();
-const [rows] = await db.query(`
-SELECT patients.id, patients.name, patients.age, patients.gender, patients.phone,
+const adminId = req.admin?.id || 1;
+const [rows] = await db.execute(`
+SELECT patients.id, patients.admin_id AS adminId, patients.name, patients.age, patients.gender, patients.phone,
 patients.condition_details AS conditionDetails,
 patients.assigned_doctor_id AS assignedDoctorId,
 doctors.name AS assignedDoctor, departments.name AS assignedDepartment,
@@ -1507,8 +1518,9 @@ DATE_FORMAT(patients.created_at, '%Y-%m-%d') AS registeredAt
 FROM patients
 LEFT JOIN doctors ON doctors.id = patients.assigned_doctor_id
 LEFT JOIN departments ON departments.id = doctors.department_id
+WHERE patients.admin_id = ?
 ORDER BY patients.id DESC
-`);
+`, [adminId]);
 res.json(rows);
 } catch (error) {
 console.error('Patients error:', error.message);
@@ -1518,7 +1530,7 @@ message: 'Patients fetch nahi ho paaye'
 }
 });
 
-// Create a patient record
+// Create a patient record (Assigned to the current admin)
 app.post('/api/patients', async (req, res) => {
 const body = req.body || {};
 const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -1546,13 +1558,14 @@ if (assignedDoctorId !== null) {
   const [doctorRows] = await db.execute('SELECT id FROM doctors WHERE id = ? LIMIT 1', [assignedDoctorId]);
   if (!doctorRows.length) return res.status(400).json({ message: 'Selected doctor nahi mila. Doctor list refresh karke try karein.' });
 }
+const adminId = req.admin?.id || 1;
 const [result] = await db.execute(
-  `INSERT INTO patients (name, age, gender, phone, condition_details, assigned_doctor_id, patient_message, doctor_instructions)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  [name, age, gender, phone || null, conditionDetails || null, assignedDoctorId, patientMessage || null, doctorInstructions || null]
+  `INSERT INTO patients (admin_id, name, age, gender, phone, condition_details, assigned_doctor_id, patient_message, doctor_instructions)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  [adminId, name, age, gender, phone || null, conditionDetails || null, assignedDoctorId, patientMessage || null, doctorInstructions || null]
 );
 const [rows] = await db.execute(`
-  SELECT patients.id, patients.name, patients.age, patients.gender, patients.phone,
+  SELECT patients.id, patients.admin_id AS adminId, patients.name, patients.age, patients.gender, patients.phone,
   patients.condition_details AS conditionDetails,
   patients.assigned_doctor_id AS assignedDoctorId,
   doctors.name AS assignedDoctor, departments.name AS assignedDepartment,
@@ -1596,18 +1609,19 @@ return res.status(400).json({ message: 'Patient details, assigned doctor aur not
 try {
 await ensureDashboardTables();
 await ensurePatientsTable();
-const [existing] = await db.execute('SELECT id FROM patients WHERE id = ? LIMIT 1', [id]);
-if (!existing.length) return res.status(404).json({ message: 'Patient nahi mila.' });
+const adminId = req.admin?.id || 1;
+const [existing] = await db.execute('SELECT id FROM patients WHERE id = ? AND admin_id = ? LIMIT 1', [id, adminId]);
+if (!existing.length) return res.status(403).json({ message: 'Patient nahi mila ya aapko ise access karne ki permission nahi hai.' });
 if (assignedDoctorId !== null) {
   const [doctorRows] = await db.execute('SELECT id FROM doctors WHERE id = ? LIMIT 1', [assignedDoctorId]);
   if (!doctorRows.length) return res.status(400).json({ message: 'Selected doctor nahi mila. Doctor list refresh karke try karein.' });
 }
 await db.execute(`
   UPDATE patients SET name = ?, age = ?, gender = ?, phone = ?, condition_details = ?,
-  assigned_doctor_id = ?, patient_message = ?, doctor_instructions = ? WHERE id = ?
-`, [name, age, gender, phone || null, conditionDetails || null, assignedDoctorId, patientMessage || null, doctorInstructions || null, id]);
+  assigned_doctor_id = ?, patient_message = ?, doctor_instructions = ? WHERE id = ? AND admin_id = ?
+`, [name, age, gender, phone || null, conditionDetails || null, assignedDoctorId, patientMessage || null, doctorInstructions || null, id, adminId]);
 const [rows] = await db.execute(`
-  SELECT patients.id, patients.name, patients.age, patients.gender, patients.phone,
+  SELECT patients.id, patients.admin_id AS adminId, patients.name, patients.age, patients.gender, patients.phone,
   patients.condition_details AS conditionDetails,
   patients.assigned_doctor_id AS assignedDoctorId,
   doctors.name AS assignedDoctor, departments.name AS assignedDepartment,
@@ -1626,17 +1640,19 @@ res.status(500).json({ message: 'Patient database mein update nahi ho paaya.' })
 }
 });
 
-// Get appointments from MySQL
+// Get appointments from MySQL (Private to current admin)
 app.get('/api/appointments', async (req, res) => {
 try {
 await ensureAppointmentsTable();
-const [rows] = await db.query(`
+const adminId = req.admin?.id || 1;
+const [rows] = await db.execute(`
 SELECT appointment_code AS id, patient_name AS patient, doctor_name AS doctor,
 department, DATE_FORMAT(appointment_date, '%Y-%m-%d') AS date,
 TIME_FORMAT(appointment_time, '%H:%i') AS time, status
 FROM appointments
+WHERE admin_id = ? OR admin_id IS NULL
 ORDER BY appointment_date DESC, appointment_time ASC, id DESC
-`);
+`, [adminId]);
 res.json(rows);
 } catch (error) {
 console.error('Appointments fetch error:', error.message);
@@ -1676,6 +1692,7 @@ if (!doctorRows.length) {
 }
 await ensureAppointmentsTable();
 const appointmentCode = `APT-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`;
+const adminId = req.admin?.id || 1;
 const connection = await db.getConnection();
 let confirmationNotificationId = null;
 let reminderScheduled = false;
@@ -1685,10 +1702,10 @@ try {
   await connection.beginTransaction();
   const [appointmentResult] = await connection.execute(`
     INSERT INTO appointments (
-      appointment_code, patient_name, patient_phone, sms_consent,
+      admin_id, appointment_code, patient_name, patient_phone, sms_consent,
       doctor_name, department, appointment_date, appointment_time
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [appointmentCode, patient, smsConsent ? patientPhone : null, smsConsent ? 1 : 0, doctor, department, date, `${time}:00`]);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [adminId, appointmentCode, patient, smsConsent ? patientPhone : null, smsConsent ? 1 : 0, doctor, department, date, `${time}:00`]);
 
   if (smsConsent) {
     const confirmationBody = `CarePoint: Appointment with ${doctor} (${department}) booked for ${date} at ${time}. Reference ${appointmentCode}.`;
@@ -1759,7 +1776,11 @@ return res.status(400).json({ message: 'Valid appointment code and status requir
 
 try {
 await ensureAppointmentsTable();
-await db.execute('UPDATE appointments SET status = ? WHERE appointment_code = ?', [status, code]);
+const adminId = req.admin?.id || 1;
+const [existing] = await db.execute('SELECT id FROM appointments WHERE appointment_code = ? AND (admin_id = ? OR admin_id IS NULL) LIMIT 1', [code, adminId]);
+if (!existing.length) return res.status(403).json({ message: 'Appointment nahi mila ya aapko ise update karne ki permission nahi hai.' });
+
+await db.execute('UPDATE appointments SET status = ? WHERE appointment_code = ? AND (admin_id = ? OR admin_id IS NULL)', [status, code, adminId]);
 if (status === 'Cancelled') {
   await db.execute(`
     UPDATE appointment_sms_notifications
