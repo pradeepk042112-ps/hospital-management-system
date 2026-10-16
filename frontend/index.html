@@ -17,10 +17,10 @@
       <p class="auth-intro" id="authIntro">Sign in with your personal administrator account.</p>
       <p class="auth-message" id="authMessage" role="status" aria-live="polite" hidden></p>
       <form id="authForm">
-        <label class="form-field" id="authNameField" hidden>Full name<input name="name" maxlength="100" autocomplete="name" /></label>
-        <label class="form-field" id="authEmailField">Email<input name="email" type="email" maxlength="150" autocomplete="email" placeholder="admin@example.com" /></label>
-        <label class="form-field"><span id="authPhoneLabel">Email or mobile number</span><input name="phone" type="text" required maxlength="150" autocomplete="username" placeholder="admin@example.com or 9876543210" /></label>
-        <label class="form-field" id="authPasswordField">Password<input name="password" type="password" required minlength="10" maxlength="200" autocomplete="current-password" placeholder="At least 10 characters" /></label>
+        <label class="form-field" id="authNameField" hidden>Full name<input name="name" maxlength="100" autocomplete="name" placeholder="e.g. Dr. Rajesh Sharma" /></label>
+        <label class="form-field" id="authEmailField">Email address<input name="email" type="email" maxlength="150" autocomplete="email" placeholder="admin@example.com" /></label>
+        <label class="form-field" id="authPhoneField"><span id="authPhoneLabel">Mobile number</span><input name="phone" type="tel" maxlength="20" autocomplete="tel" placeholder="e.g. 9876543210" /></label>
+        <label class="form-field" id="authPasswordField">Password<input name="password" type="password" required minlength="6" maxlength="200" autocomplete="current-password" placeholder="Enter password (min 6 characters)" /></label>
         <button class="button button-primary auth-submit" id="authSubmit" type="submit">Sign in</button>
       </form>
       <form id="otpForm" hidden>
@@ -34,12 +34,15 @@
         <p class="auth-intro" id="resetIntro">Enter the verification code and set a new password.</p>
         <p class="auth-message" id="resetMessage" role="status" aria-live="polite" hidden></p>
         <label class="form-field"><span id="resetCodeLabel">SMS verification code</span><input name="code" type="text" required inputmode="numeric" pattern="[0-9]{4,10}" maxlength="10" autocomplete="one-time-code" placeholder="Enter OTP" /></label>
-        <label class="form-field">New password<input name="newPassword" type="password" required minlength="10" maxlength="200" autocomplete="new-password" placeholder="At least 10 characters" /></label>
+        <label class="form-field">New password<input name="newPassword" type="password" required minlength="6" maxlength="200" autocomplete="new-password" placeholder="At least 6 characters" /></label>
         <button class="button button-primary auth-submit" id="resetSubmit" type="submit">Reset password and sign in</button>
         <div class="otp-actions"><button class="auth-mode-toggle" id="resetResend" type="button">Resend code</button><button class="auth-mode-toggle" id="resetBack" type="button">Back to sign in</button></div>
       </form>
-      <button class="auth-mode-toggle" id="authForgotToggle" type="button" hidden>Forgot password?</button>
-      <button class="auth-mode-toggle" id="authModeToggle" type="button" hidden>Use sign in instead</button>
+      <div class="auth-links" style="display:flex; flex-direction:column; gap:4px; margin-top:12px; text-align:center;">
+        <button class="auth-mode-toggle" id="authRegisterToggle" type="button">New admin? Create an account</button>
+        <button class="auth-mode-toggle" id="authForgotToggle" type="button">Forgot / Reset password?</button>
+        <button class="auth-mode-toggle" id="authModeToggle" type="button" hidden>Retry connection</button>
+      </div>
       <p class="auth-footnote">Hospital records are available only after admin sign in.</p>
     </section>
   </main>

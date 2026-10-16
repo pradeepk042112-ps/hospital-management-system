@@ -105,6 +105,7 @@ const authScreen = document.getElementById('authScreen');
 const authForm = document.getElementById('authForm');
 const authNameField = document.getElementById('authNameField');
 const authEmailField = document.getElementById('authEmailField');
+const authPhoneField = document.getElementById('authPhoneField');
 const authPasswordField = document.getElementById('authPasswordField');
 const authTitle = document.getElementById('authTitle');
 const authIntro = document.getElementById('authIntro');
@@ -112,6 +113,7 @@ const authEyebrow = document.getElementById('authEyebrow');
 const authMessage = document.getElementById('authMessage');
 const authModeToggle = document.getElementById('authModeToggle');
 const authForgotToggle = document.getElementById('authForgotToggle');
+const authRegisterToggle = document.getElementById('authRegisterToggle');
 const authSubmit = document.getElementById('authSubmit');
 const otpForm = document.getElementById('otpForm');
 const otpIntro = document.getElementById('otpIntro');
@@ -1022,81 +1024,95 @@ function setAuthMode(mode, message = '') {
   authForm.hidden = mode === 'error';
   otpForm.hidden = true;
   if (resetForm) resetForm.hidden = true;
-  const otpAvailable = smsConfigured || demoOtpEnabled;
-  authModeToggle.hidden = mode !== 'error' && otpAvailable;
-  authModeToggle.textContent = mode === 'error' ? 'Retry connection' : 'Check OTP setup';
+  if (authModeToggle) {
+    authModeToggle.hidden = mode !== 'error';
+    authModeToggle.textContent = 'Retry connection';
+  }
   authMessage.hidden = !message;
   authMessage.textContent = message;
   authForm.dataset.mode = mode;
+
   const nameInput = authForm.elements.name;
   const emailInput = authForm.elements.email;
   const phoneInput = authForm.elements.phone;
   const passwordInput = authForm.elements.password;
 
-  authNameField.hidden = mode !== 'setup';
-  authEmailField.hidden = mode !== 'setup';
-  if (authPasswordField) authPasswordField.hidden = mode === 'forgot';
+  if (mode === 'setup' || mode === 'register') {
+    authEyebrow.textContent = 'ADMIN REGISTRATION';
+    authTitle.textContent = 'Create Admin Account';
+    authIntro.textContent = 'Enter your details to create an administrator account.';
+    if (authNameField) authNameField.hidden = false;
+    if (authEmailField) authEmailField.hidden = false;
+    if (authPhoneField) authPhoneField.hidden = false;
+    if (authPasswordField) authPasswordField.hidden = false;
 
-  nameInput.required = mode === 'setup';
-  emailInput.required = mode === 'setup';
-  phoneInput.required = mode !== 'error';
-  passwordInput.required = mode === 'setup' || mode === 'login';
+    nameInput.required = true;
+    emailInput.required = true;
+    phoneInput.required = true;
+    passwordInput.required = true;
 
-  phoneInput.type = mode === 'setup' ? 'tel' : 'text';
-  phoneInput.maxLength = mode === 'setup' ? 20 : 150;
-  phoneInput.removeAttribute('pattern');
-  phoneInput.autocomplete = mode === 'setup' ? 'tel' : 'username';
+    phoneInput.placeholder = 'e.g. 9876543210';
+    authSubmit.textContent = 'Create account & Sign in';
 
-  if (mode === 'setup') {
-    document.getElementById('authPhoneLabel').textContent = 'Mobile number';
-    phoneInput.placeholder = '9876543210 or +919876543210';
-    phoneInput.title = 'Enter a 10-digit Indian mobile or include your country code.';
-    authEyebrow.textContent = 'INITIAL ADMIN SETUP';
-    authTitle.textContent = 'Create the first admin';
-    authIntro.textContent = demoOtpEnabled
-      ? 'Create your profile, mobile number, and password. A local demo code will appear on screen to complete setup.'
-      : 'Create your profile, mobile number, and password. Sign in will also require a code sent to your phone.';
-    authSubmit.textContent = 'Create admin account';
-    passwordInput.autocomplete = 'new-password';
+    if (authRegisterToggle) {
+      authRegisterToggle.hidden = false;
+      authRegisterToggle.textContent = 'Already have an account? Sign in';
+    }
     if (authForgotToggle) authForgotToggle.hidden = true;
   } else if (mode === 'login') {
-    document.getElementById('authPhoneLabel').textContent = 'Email or mobile number';
-    phoneInput.placeholder = 'admin@example.com or 9876543210';
-    phoneInput.title = 'Enter the registered email or mobile number. A 10-digit Indian number is accepted.';
     authEyebrow.textContent = 'SECURE ADMIN ACCESS';
-    authTitle.textContent = 'Admin sign in';
-    authIntro.textContent = demoOtpEnabled
-      ? 'Enter your registered email or mobile number and password. A local demo code will appear on screen.'
-      : 'Enter your registered email or mobile number and password. A one-time code will be sent to your phone.';
+    authTitle.textContent = 'Admin Sign In';
+    authIntro.textContent = 'Sign in with your email or mobile number and password.';
+    if (authNameField) authNameField.hidden = true;
+    if (authEmailField) authEmailField.hidden = false;
+    if (authPhoneField) authPhoneField.hidden = false;
+    if (authPasswordField) authPasswordField.hidden = false;
+
+    nameInput.required = false;
+    emailInput.required = false;
+    phoneInput.required = false;
+    passwordInput.required = true;
+
+    phoneInput.placeholder = 'e.g. 9876543210';
     authSubmit.textContent = 'Sign in';
-    passwordInput.autocomplete = 'current-password';
+
+    if (authRegisterToggle) {
+      authRegisterToggle.hidden = false;
+      authRegisterToggle.textContent = 'New admin? Create an account';
+    }
     if (authForgotToggle) {
       authForgotToggle.hidden = false;
       authForgotToggle.textContent = 'Forgot / Reset password?';
     }
   } else if (mode === 'forgot') {
-    document.getElementById('authPhoneLabel').textContent = 'Email or mobile number';
-    phoneInput.placeholder = 'admin@example.com or 9876543210';
-    phoneInput.title = 'Enter your registered email or mobile number to receive a reset code.';
     authEyebrow.textContent = 'PASSWORD RECOVERY';
-    authTitle.textContent = 'Reset admin password';
-    authIntro.textContent = demoOtpEnabled
-      ? 'Enter your registered email or mobile number. A local demo verification code will appear on screen.'
-      : 'Enter your registered email or mobile number. A verification code will be sent to your phone.';
+    authTitle.textContent = 'Reset Admin Password';
+    authIntro.textContent = 'Enter your registered email or mobile number to receive a verification code.';
+    if (authNameField) authNameField.hidden = true;
+    if (authEmailField) authEmailField.hidden = false;
+    if (authPhoneField) authPhoneField.hidden = true;
+    if (authPasswordField) authPasswordField.hidden = true;
+
+    nameInput.required = false;
+    emailInput.required = true;
+    phoneInput.required = false;
+    passwordInput.required = false;
+
     authSubmit.textContent = 'Send verification code';
-    if (authForgotToggle) {
-      authForgotToggle.hidden = false;
-      authForgotToggle.textContent = 'Back to sign in';
+
+    if (authRegisterToggle) {
+      authRegisterToggle.hidden = false;
+      authRegisterToggle.textContent = 'Back to sign in';
     }
+    if (authForgotToggle) authForgotToggle.hidden = true;
   } else {
     authEyebrow.textContent = 'SECURE ADMIN ACCESS';
-    authTitle.textContent = 'Admin sign in unavailable';
-    authIntro.textContent = 'The server could not check admin accounts.';
-    authModeToggle.textContent = 'Retry connection';
+    authTitle.textContent = 'Service unavailable';
+    authIntro.textContent = 'Could not connect to the database. Check MySQL backend.';
+    if (authRegisterToggle) authRegisterToggle.hidden = true;
     if (authForgotToggle) authForgotToggle.hidden = true;
   }
-  authSubmit.disabled = !otpAvailable;
-  if (mode !== 'error' && !otpAvailable) authSubmit.textContent = 'OTP setup required';
+  authSubmit.disabled = false;
 }
 
 function showOtpStep(challengeToken, phoneMasked, demoCode = '') {
@@ -1178,12 +1194,7 @@ async function checkAuthentication() {
       enterApplication(status.admin);
     } else {
       const mode = status.setupRequired ? 'setup' : 'login';
-      const authNotice = demoOtpEnabled
-        ? 'LOCAL DEMO OTP is active. Codes appear on this screen and are not sent to a phone. Use this only on your local computer.'
-        : smsConfigured
-          ? ''
-          : 'Admin access is paused until Twilio Verify is configured or local demo OTP is enabled. Check backend/.env and restart the backend.';
-      setAuthMode(mode, authNotice);
+      setAuthMode(mode);
     }
   } catch (error) {
     setAuthMode('error', error.message || 'Could not reach the backend. Start the backend and MySQL, then retry.');
@@ -1488,37 +1499,80 @@ document.getElementById('profileModalClose').addEventListener('click', closeProf
 document.getElementById('profileModalCancel').addEventListener('click', closeProfileModal);
 document.getElementById('logoutButton').addEventListener('click', handleLogout);
 document.querySelectorAll('.profile-mini, .top-profile').forEach((button) => button.addEventListener('click', openProfileModal));
-authModeToggle.addEventListener('click', checkAuthentication);
+if (authModeToggle) authModeToggle.addEventListener('click', checkAuthentication);
+if (authRegisterToggle) {
+  authRegisterToggle.addEventListener('click', () => {
+    const current = authForm.dataset.mode;
+    if (current === 'register' || current === 'setup') {
+      setAuthMode('login');
+    } else {
+      setAuthMode('register');
+    }
+  });
+}
 authForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const mode = authForm.dataset.mode;
-  if (!['setup', 'login', 'forgot'].includes(mode)) return;
+  if (!['setup', 'register', 'login', 'forgot'].includes(mode)) return;
   const data = new FormData(authForm);
   const submitButton = authForm.querySelector('button[type="submit"]');
   submitButton.disabled = true;
   try {
     if (mode === 'forgot') {
+      const email = String(data.get('email') || '').trim();
+      const phone = String(data.get('phone') || '').trim();
       const result = await apiRequest('auth/forgot-password', {
         method: 'POST',
-        body: JSON.stringify({
-          phone: normalizeMobilePhone(String(data.get('phone')))
-        })
+        body: JSON.stringify({ phone: email || phone })
       });
       authForm.reset();
       showResetStep(result.challengeToken, result.phoneMasked, result.demoCode || '');
       return;
     }
-    const result = await apiRequest(mode === 'setup' ? 'auth/register' : 'auth/login', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...(mode === 'setup' ? { name: String(data.get('name')).trim() } : {}),
-        ...(mode === 'setup' ? { email: String(data.get('email')).trim() } : {}),
-        phone: normalizeMobilePhone(String(data.get('phone'))),
-        password: String(data.get('password'))
-      })
-    });
-    authForm.reset();
-    showOtpStep(result.challengeToken, result.phoneMasked, result.demoCode || '');
+    if (mode === 'setup' || mode === 'register') {
+      const name = String(data.get('name') || '').trim();
+      const email = String(data.get('email') || '').trim();
+      const phone = String(data.get('phone') || '').trim();
+      const password = String(data.get('password') || '');
+      const result = await apiRequest('auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ name, email, phone, password })
+      });
+      authForm.reset();
+      if (result.authenticated && result.admin) {
+        showToast('Admin account created! Signed in successfully.');
+        enterApplication(result.admin);
+        return;
+      }
+      if (result.otpRequired) {
+        showOtpStep(result.challengeToken, result.phoneMasked, result.demoCode || '');
+        return;
+      }
+      return;
+    }
+    if (mode === 'login') {
+      const email = String(data.get('email') || '').trim();
+      const phone = String(data.get('phone') || '').trim();
+      const password = String(data.get('password') || '');
+      if (!email && !phone) {
+        setAuthMode('login', 'Please enter your email or mobile number.');
+        return;
+      }
+      const result = await apiRequest('auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, phone, password })
+      });
+      authForm.reset();
+      if (result.authenticated && result.admin) {
+        showToast('Signed in successfully!');
+        enterApplication(result.admin);
+        return;
+      }
+      if (result.otpRequired) {
+        showOtpStep(result.challengeToken, result.phoneMasked, result.demoCode || '');
+        return;
+      }
+    }
   } catch (error) {
     setAuthMode(mode, error.message);
   } finally {

@@ -382,7 +382,7 @@ function validAdminDetails(name, email, phone, password) {
     name && name.length <= 100 &&
     email.length <= 150 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) &&
     validMobilePhone(phone) &&
-    typeof password === 'string' && password.length >= 10 && password.length <= 200
+    typeof password === 'string' && password.length >= 6 && password.length <= 200
   );
 }
 
@@ -429,73 +429,102 @@ app.post('/api/auth/register', async (req, res) => {
   const phone = normalizeMobilePhone(req.body?.phone);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   if (!validAdminDetails(name, email, phone, password)) {
-    return res.status(400).json({ message: 'Enter a name, valid email, E.164 mobile number (+country code), and password with at least 10 characters.' });
+    return res.status(400).json({ message: 'Enter full name, valid email, 10-digit mobile number, and password (at least 6 characters).' });
   }
-  if (!isOtpAvailable()) return res.status(503).json({ message: 'OTP sign-in is unavailable. Configure Twilio Verify or enable local demo OTP in backend/.env.' });
 
   let connection;
-  let lockAcquired = false;
-  let transactionStarted = false;
   try {
     await ensureAuthTables();
     connection = await db.getConnection();
-    const [[lock]] = await connection.query("SELECT GET_LOCK('carepoint_admin_bootstrap', 10) AS acquired");
-    lockAcquired = Number(lock.acquired) === 1;
-    if (!lockAcquired) return res.status(503).json({ message: 'Initial admin setup is busy. Please try again.' });
-    const [[count]] = await connection.query('SELECT COUNT(*) AS total FROM admins');
-    if (Number(count.total) !== 0) return res.status(403).json({ message: 'Initial setup is already complete. Please log in.' });
+
+    const [existing] = await connection.execute(
+      'SELECT id, email, mobile_phone FROM admins WHERE email = ? OR mobile_phone = ? LIMIT 1',
+      [email, phone]
+    );
+    if (existing.length) {
+      const isSameEmail = existing[0].email === email;
+      return res.status(409).json({ message: isSameEmail ? 'Is email par already admin account bana hua hai.' : 'Is mobile number par already admin account bana hua hai.' });
+    }
 
     const passwordHash = await hashPassword(password);
-    await connection.beginTransaction();
-    transactionStarted = true;
     const [result] = await connection.execute(
-      'INSERT INTO admins (name, email, mobile_phone, password_hash) VALUES (?, ?, ?, ?)',
-      [name, email, phone, passwordHash]
+      'INSERT INTO admins (name, email, mobile_phone, role, password_hash) VALUES (?, ?, ?, ?, ?)',
+      [name, email, phone, 'Administrator', passwordHash]
     );
-    const challenge = await createOtpChallenge(connection, result.insertId, phone);
-    await connection.commit();
-    transactionStarted = false;
-    res.status(201).json({ otpRequired: true, ...challenge, phoneMasked: maskPhone(phone) });
-  } catch (error) {
-    console.error('Initial admin setup error:', error.message);
-    if (transactionStarted && connection) await connection.rollback().catch(() => {});
-    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'An admin already uses this email or mobile number.' });
-    res.status(error.status || 500).json({ message: error.status ? error.message : 'Could not create the initial admin account.' });
-  } finally {
-    if (connection) {
-      if (lockAcquired) await connection.query("SELECT RELEASE_LOCK('carepoint_admin_bootstrap')").catch(() => {});
-      connection.release();
+
+    const newAdmin = { id: result.insertId, name, email, mobile_phone: phone, role: 'Administrator' };
+
+    if (isTwilioConfigured() && !isDemoOtpEnabled()) {
+      const challenge = await createOtpChallenge(connection, result.insertId, phone);
+      return res.status(201).json({ otpRequired: true, ...challenge, phoneMasked: maskPhone(phone) });
     }
+
+    const sessionToken = await createAdminSession(connection, result.insertId);
+    setSessionCookie(res, sessionToken);
+    res.status(201).json({ authenticated: true, admin: publicAdmin(newAdmin), message: 'Admin account create ho gaya.' });
+  } catch (error) {
+    console.error('Admin registration error:', error.message);
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Is email ya mobile number se admin already registered hai.' });
+    res.status(500).json({ message: 'Admin account create nahi ho paaya.' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const identifier = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  const emailInput = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const phoneInput = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  const normalizedPhone = normalizeMobilePhone(identifier);
-  const isPhone = validMobilePhone(normalizedPhone);
-  const isEmail = identifier.length <= 150 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
-  if ((!isPhone && !isEmail) || !password || password.length > 200) {
+
+  let email = emailInput;
+  let phone = phoneInput ? normalizeMobilePhone(phoneInput) : '';
+
+  if (!email && phoneInput.includes('@')) {
+    email = phoneInput.toLowerCase();
+    phone = '';
+  }
+
+  if ((!email && !phone) || !password || password.length > 200) {
     return res.status(400).json({ message: 'Enter your registered email or mobile number and password.' });
   }
-  if (!isOtpAvailable()) return res.status(503).json({ message: 'OTP sign-in is unavailable. Configure Twilio Verify or enable local demo OTP in backend/.env.' });
+
   try {
     await ensureAuthTables();
-    const normalizedIdentifier = isEmail ? identifier.toLowerCase() : normalizedPhone;
-    const [rows] = await db.execute(
-      'SELECT id, name, email, mobile_phone, role, password_hash FROM admins WHERE mobile_phone = ? OR email = ? LIMIT 1',
-      [normalizedIdentifier, normalizedIdentifier]
-    );
+    let rows = [];
+    if (email && phone) {
+      const [r] = await db.execute(
+        'SELECT id, name, email, mobile_phone, role, password_hash FROM admins WHERE email = ? OR mobile_phone = ? LIMIT 1',
+        [email, phone]
+      );
+      rows = r;
+    } else if (email) {
+      const [r] = await db.execute(
+        'SELECT id, name, email, mobile_phone, role, password_hash FROM admins WHERE email = ? LIMIT 1',
+        [email]
+      );
+      rows = r;
+    } else {
+      const [r] = await db.execute(
+        'SELECT id, name, email, mobile_phone, role, password_hash FROM admins WHERE mobile_phone = ? LIMIT 1',
+        [phone]
+      );
+      rows = r;
+    }
+
     const admin = rows[0];
     const passwordMatches = admin && password.length <= 200 ? await verifyPassword(password, admin.password_hash) : false;
-    if (!passwordMatches) return res.status(401).json({ message: 'Email or mobile number or password is incorrect.' });
+    if (!passwordMatches) return res.status(401).json({ message: 'Email, mobile number ya password galat hai.' });
+
     const connection = await db.getConnection();
     try {
-      const challenge = await createOtpChallenge(connection, admin.id, admin.mobile_phone);
-      res.json({ otpRequired: true, ...challenge, phoneMasked: maskPhone(admin.mobile_phone) });
-    } catch (error) {
-      console.error('Admin OTP request error:', error.message);
-      res.status(error.status || 500).json({ message: error.status ? error.message : 'Could not send the sign-in OTP.' });
+      if (isTwilioConfigured() && !isDemoOtpEnabled()) {
+        const challenge = await createOtpChallenge(connection, admin.id, admin.mobile_phone);
+        return res.json({ otpRequired: true, ...challenge, phoneMasked: maskPhone(admin.mobile_phone) });
+      }
+
+      const sessionToken = await createAdminSession(connection, admin.id);
+      setSessionCookie(res, sessionToken);
+      res.json({ authenticated: true, admin: publicAdmin(admin), message: 'Signed in successfully.' });
     } finally {
       connection.release();
     }
