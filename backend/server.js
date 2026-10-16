@@ -160,7 +160,7 @@ function setSessionCookie(res, token) {
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' || process.env.RENDER === 'true',
     path: '/',
     maxAge: SESSION_DURATION_MS
   });
@@ -170,7 +170,7 @@ function clearSessionCookie(res) {
   res.clearCookie(SESSION_COOKIE, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' || process.env.RENDER === 'true',
     path: '/'
   });
 }
@@ -809,7 +809,11 @@ app.post('/api/auth/password', async (req, res) => {
 
 app.get('/api/admins', async (req, res) => {
   try {
-    const [admins] = await db.query('SELECT id, name, email, role, created_at AS createdAt FROM admins ORDER BY created_at, id');
+    if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+    const [admins] = await db.execute(
+      'SELECT id, name, email, role, created_at AS createdAt FROM admins WHERE id = ?',
+      [req.admin.id]
+    );
     res.json(admins);
   } catch (error) {
     console.error('Admin list error:', error.message);
@@ -894,6 +898,7 @@ async function ensureAppointmentsTable() {
         await db.query('ALTER TABLE appointments ADD COLUMN admin_id BIGINT UNSIGNED NULL AFTER id');
         await db.query('ALTER TABLE appointments ADD KEY idx_appointments_admin (admin_id)');
       }
+      await db.query('UPDATE appointments SET admin_id = 1 WHERE admin_id IS NULL');
 
       await db.query(`
         CREATE TABLE IF NOT EXISTS appointment_sms_notifications (
@@ -1056,6 +1061,7 @@ async function ensureDashboardTables() {
       await db.query(`
         CREATE TABLE IF NOT EXISTS invoices (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          admin_id BIGINT UNSIGNED NULL,
           invoice_number VARCHAR(32) NOT NULL,
           patient_name VARCHAR(150) NOT NULL,
           service VARCHAR(180) NOT NULL,
@@ -1064,9 +1070,17 @@ async function ensureDashboardTables() {
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (id),
           UNIQUE KEY unique_invoice_number (invoice_number),
+          KEY idx_invoices_admin (admin_id),
           KEY idx_invoices_created_status (created_at, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
+
+      const [invAdminColumns] = await db.query("SHOW COLUMNS FROM invoices LIKE 'admin_id'");
+      if (!invAdminColumns.length) {
+        await db.query('ALTER TABLE invoices ADD COLUMN admin_id BIGINT UNSIGNED NULL AFTER id');
+        await db.query('ALTER TABLE invoices ADD KEY idx_invoices_admin (admin_id)');
+      }
+      await db.query('UPDATE invoices SET admin_id = 1 WHERE admin_id IS NULL');
 
       const connection = await db.getConnection();
       try {
@@ -1099,8 +1113,8 @@ async function ensureDashboardTables() {
         if (Number(invoiceStats.total) === 0) {
           for (const invoice of defaultInvoices) {
             await connection.execute(`
-              INSERT INTO invoices (invoice_number, patient_name, service, amount, status)
-              VALUES (?, ?, ?, ?, ?)
+              INSERT INTO invoices (admin_id, invoice_number, patient_name, service, amount, status)
+              VALUES (1, ?, ?, ?, ?, ?)
             `, invoice);
           }
         }
@@ -1146,8 +1160,8 @@ async function ensurePatientsTable() {
       if (!existingColumns.has('admin_id')) {
         await db.query('ALTER TABLE patients ADD COLUMN admin_id BIGINT UNSIGNED NULL AFTER id');
         await db.query('ALTER TABLE patients ADD KEY idx_patients_admin (admin_id)');
-        await db.query('UPDATE patients SET admin_id = 1 WHERE admin_id IS NULL');
       }
+      await db.query('UPDATE patients SET admin_id = 1 WHERE admin_id IS NULL');
       const migrations = [
         ['condition_details', 'TEXT NULL'],
         ['assigned_doctor_id', 'INT UNSIGNED NULL'],
@@ -1236,16 +1250,19 @@ res.status(500).json({ message: 'Doctors load nahi ho paaye.' });
 }
 });
 
-// Load invoices stored in MySQL
+// Load invoices stored in MySQL (Private to current admin)
 app.get('/api/invoices', async (req, res) => {
 try {
 await ensureDashboardTables();
-const [rows] = await db.query(`
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
+const [rows] = await db.execute(`
   SELECT invoice_number AS id, patient_name AS patient, service, amount, status,
   DATE_FORMAT(created_at, '%Y-%m') AS month
   FROM invoices
+  WHERE admin_id = ?
   ORDER BY created_at DESC, id DESC
-`);
+`, [adminId]);
 res.json(rows);
 } catch (error) {
 console.error('Invoices error:', error.message);
@@ -1448,16 +1465,18 @@ return res.status(400).json({ message: 'Valid patient, service, amount aur statu
 
 try {
 await ensureDashboardTables();
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
 const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
 await db.execute(`
-  INSERT INTO invoices (invoice_number, patient_name, service, amount, status)
-  VALUES (?, ?, ?, ?, ?)
-`, [invoiceNumber, patient, service, amount, status]);
+  INSERT INTO invoices (admin_id, invoice_number, patient_name, service, amount, status)
+  VALUES (?, ?, ?, ?, ?, ?)
+`, [adminId, invoiceNumber, patient, service, amount, status]);
 const [rows] = await db.execute(`
   SELECT invoice_number AS id, patient_name AS patient, service, amount, status,
   DATE_FORMAT(created_at, '%Y-%m') AS month
-  FROM invoices WHERE invoice_number = ?
-`, [invoiceNumber]);
+  FROM invoices WHERE invoice_number = ? AND admin_id = ?
+`, [invoiceNumber, adminId]);
 res.status(201).json(rows[0]);
 } catch (error) {
 console.error('Invoice save error:', error.message);
@@ -1483,17 +1502,19 @@ return res.status(400).json({ message: 'Valid patient, service, amount aur statu
 
 try {
 await ensureDashboardTables();
-const [existing] = await db.execute('SELECT id FROM invoices WHERE invoice_number = ? LIMIT 1', [invoiceNumber]);
-if (!existing.length) return res.status(404).json({ message: 'Invoice nahi mila.' });
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
+const [existing] = await db.execute('SELECT id FROM invoices WHERE invoice_number = ? AND admin_id = ? LIMIT 1', [invoiceNumber, adminId]);
+if (!existing.length) return res.status(404).json({ message: 'Invoice nahi mila ya aapko ise access karne ki permission nahi hai.' });
 await db.execute(`
   UPDATE invoices SET patient_name = ?, service = ?, amount = ?, status = ?
-  WHERE invoice_number = ?
-`, [patient, service, amount, status, invoiceNumber]);
+  WHERE invoice_number = ? AND admin_id = ?
+`, [patient, service, amount, status, invoiceNumber, adminId]);
 const [rows] = await db.execute(`
   SELECT invoice_number AS id, patient_name AS patient, service, amount, status,
   DATE_FORMAT(created_at, '%Y-%m') AS month
-  FROM invoices WHERE invoice_number = ?
-`, [invoiceNumber]);
+  FROM invoices WHERE invoice_number = ? AND admin_id = ?
+`, [invoiceNumber, adminId]);
 res.json(rows[0]);
 } catch (error) {
 console.error('Invoice update error:', error.message);
@@ -1506,7 +1527,8 @@ app.get('/api/patients', async (req, res) => {
 try {
 await ensureDashboardTables();
 await ensurePatientsTable();
-const adminId = req.admin?.id || 1;
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
 const [rows] = await db.execute(`
 SELECT patients.id, patients.admin_id AS adminId, patients.name, patients.age, patients.gender, patients.phone,
 patients.condition_details AS conditionDetails,
@@ -1554,11 +1576,12 @@ return res.status(400).json({ message: 'Patient details, assigned doctor aur not
 try {
 await ensureDashboardTables();
 await ensurePatientsTable();
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
 if (assignedDoctorId !== null) {
   const [doctorRows] = await db.execute('SELECT id FROM doctors WHERE id = ? LIMIT 1', [assignedDoctorId]);
   if (!doctorRows.length) return res.status(400).json({ message: 'Selected doctor nahi mila. Doctor list refresh karke try karein.' });
 }
-const adminId = req.admin?.id || 1;
+const adminId = req.admin.id;
 const [result] = await db.execute(
   `INSERT INTO patients (admin_id, name, age, gender, phone, condition_details, assigned_doctor_id, patient_message, doctor_instructions)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1609,7 +1632,8 @@ return res.status(400).json({ message: 'Patient details, assigned doctor aur not
 try {
 await ensureDashboardTables();
 await ensurePatientsTable();
-const adminId = req.admin?.id || 1;
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
 const [existing] = await db.execute('SELECT id FROM patients WHERE id = ? AND admin_id = ? LIMIT 1', [id, adminId]);
 if (!existing.length) return res.status(403).json({ message: 'Patient nahi mila ya aapko ise access karne ki permission nahi hai.' });
 if (assignedDoctorId !== null) {
@@ -1644,13 +1668,14 @@ res.status(500).json({ message: 'Patient database mein update nahi ho paaya.' })
 app.get('/api/appointments', async (req, res) => {
 try {
 await ensureAppointmentsTable();
-const adminId = req.admin?.id || 1;
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
 const [rows] = await db.execute(`
 SELECT appointment_code AS id, patient_name AS patient, doctor_name AS doctor,
 department, DATE_FORMAT(appointment_date, '%Y-%m-%d') AS date,
 TIME_FORMAT(appointment_time, '%H:%i') AS time, status
 FROM appointments
-WHERE admin_id = ? OR admin_id IS NULL
+WHERE admin_id = ?
 ORDER BY appointment_date DESC, appointment_time ASC, id DESC
 `, [adminId]);
 res.json(rows);
@@ -1691,8 +1716,9 @@ if (!doctorRows.length) {
   return res.status(400).json({ message: 'Selected doctor department se match nahi karta.' });
 }
 await ensureAppointmentsTable();
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
 const appointmentCode = `APT-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString('hex').toUpperCase()}`;
-const adminId = req.admin?.id || 1;
+const adminId = req.admin.id;
 const connection = await db.getConnection();
 let confirmationNotificationId = null;
 let reminderScheduled = false;
@@ -1776,11 +1802,12 @@ return res.status(400).json({ message: 'Valid appointment code and status requir
 
 try {
 await ensureAppointmentsTable();
-const adminId = req.admin?.id || 1;
-const [existing] = await db.execute('SELECT id FROM appointments WHERE appointment_code = ? AND (admin_id = ? OR admin_id IS NULL) LIMIT 1', [code, adminId]);
+if (!req.admin?.id) return res.status(401).json({ message: 'Please log in to continue.' });
+const adminId = req.admin.id;
+const [existing] = await db.execute('SELECT id FROM appointments WHERE appointment_code = ? AND admin_id = ? LIMIT 1', [code, adminId]);
 if (!existing.length) return res.status(403).json({ message: 'Appointment nahi mila ya aapko ise update karne ki permission nahi hai.' });
 
-await db.execute('UPDATE appointments SET status = ? WHERE appointment_code = ? AND (admin_id = ? OR admin_id IS NULL)', [status, code, adminId]);
+await db.execute('UPDATE appointments SET status = ? WHERE appointment_code = ? AND admin_id = ?', [status, code, adminId]);
 if (status === 'Cancelled') {
   await db.execute(`
     UPDATE appointment_sms_notifications

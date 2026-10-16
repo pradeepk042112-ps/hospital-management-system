@@ -1174,6 +1174,15 @@ function enterApplication(admin) {
   authMessage.hidden = true;
   currentPage = 'dashboard';
   searchTerm = '';
+  appointments = [];
+  patients = [];
+  invoices = [];
+  adminAccounts = [];
+  appointmentsLoading = true;
+  patientsLoading = true;
+  invoicesLoading = true;
+  adminAccountsLoaded = false;
+  adminAccountsError = '';
   applyProfile();
   applyPreferences();
   render();
